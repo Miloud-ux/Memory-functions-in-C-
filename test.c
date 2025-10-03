@@ -3,9 +3,12 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
-#define META_SIZE sizeof(struct block_meta)
 
-// Variables and structs
+// ===Macros===
+#define META_SIZE sizeof(struct block_meta)
+#define MIN_SIZE 8
+
+// === Variables and structs ===
 struct block_meta {
   size_t size;
   struct block_meta *next;
@@ -16,6 +19,7 @@ struct block_meta {
 // Head of the linked list to track all allocated blocks.
 void *global_base = NULL;
 
+// === Functions ===
 // Malloc function
 struct block_meta *find_free_block(struct block_meta **last, size_t size);
 struct block_meta *request_space(struct block_meta *last, size_t size);
@@ -85,6 +89,9 @@ void *malloc(size_t size) {
     return NULL;
   }
 
+  // To fix allignment
+  size = (size + 7) & ~7;
+
   if (!global_base) {
     block = request_space(NULL, size);
     if (!block) {
@@ -100,6 +107,22 @@ void *malloc(size_t size) {
         return NULL;
       }
     } else {
+      // We found the block
+      // Split it if it's large enough
+      if (block->size >= size + META_SIZE + MIN_SIZE) {
+        size_t remaining_size = block->size - (size + META_SIZE);
+        block->size = size;
+
+        struct block_meta *new_block =
+            (struct block_meta *)((char *)block + META_SIZE + size);
+
+        new_block->size = remaining_size;
+        new_block->free = 1;
+        new_block->magic = 0x22222222;
+
+        new_block->next = block->next;
+        block->next = new_block;
+      }
       block->free = 0;
       block->magic = 0x77777777;
     }
