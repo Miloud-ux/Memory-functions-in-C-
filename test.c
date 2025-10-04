@@ -32,6 +32,10 @@ void free(void *ptr);
 struct block_meta *get_block_addr(void *ptr);
 void merge_free_blocks(struct block_meta *head);
 
+// Realloc function
+void *realloc(void *ptr, size_t size);
+void shrink_and_split(struct block_meta *block, size_t size);
+
 // == Debugging ==
 void print_heap(void);
 
@@ -159,7 +163,6 @@ void *malloc(size_t size) {
     }
     global_base = block;
   } else {
-    // struct block_meta *last = global_base;
     struct block_meta *last = NULL;
     block = find_free_block(&last, size);
     if (!block) {
@@ -243,4 +246,60 @@ void print_heap(void) {
     cur = cur->next;
   }
   printf("------------\n");
+}
+
+void shrink_and_split(struct block_meta *block, size_t size) {
+  size_t old_size = block->size;
+  block->size = size;
+
+  size_t leftover = old_size - size - META_SIZE;
+
+  if (leftover >= MIN_SIZE) {
+    struct block_meta *new_block =
+        (struct block_meta *)((char *)block + META_SIZE + block->size);
+    new_block->size = leftover;
+    new_block->free = 1;
+    new_block->magic = 0x55555555;
+
+    // insert right after the curent block
+    new_block->next = block->next;
+    block->next = new_block;
+  }
+}
+
+void *realloc(void *ptr, size_t size) {
+  if (!ptr) {
+    return malloc(size);
+  }
+
+  if (size == 0) {
+    free(ptr);
+    return NULL;
+  }
+
+  struct block_meta *myblock = (struct block_meta *)ptr - 1;
+
+  // if size == block -> size : do nothing
+  if (size == myblock->size) {
+    return myblock + 1;
+  }
+
+  // if size < block -> size : shrink and split
+  if (myblock->size > size + META_SIZE + MIN_SIZE) {
+    shrink_and_split(myblock, size);
+    return myblock + 1;
+  }
+
+  /* if size > block -> size
+   * 1. free this block
+   * 2. allocate new block with the new size
+   * 3. copy the content to the new block
+   */
+
+  if (size > myblock->size) {
+    void *new_block = malloc(size);
+    memcpy(new_block, ptr, myblock->size);
+    free(ptr);
+    return new_block;
+  }
 }
