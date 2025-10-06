@@ -42,8 +42,86 @@ and the retuned pointed would be shifted by that allocated meta data before actu
 1. We track the last block examined (visited)  actually it's predecessor or the tail of the list if no block
 found so if we want to append more blocks we do it in $O(n)$ instead of traversing the list all over again 
 or keeping a variable to track the state of the list.
+2. We set that block to free.
+
+ - - - 
+# Project Extension 
+The original implementation didn't include **splitting ** and **Merging (coalescing)** blocks.
+> [!NOTE] Idea for later
+>  Set a limit eg : 100kb and use malloc when size < limit else we use mmapSet a limit eg : 100kb and use malloc when size < limit else we use mmap
+>  Switch the strategy from first fit to best fit.
 
 
+## Splitting blocks (Malloc)
+When we malloc space and create new blocks we are gonna check `if block_size > size + META_SIZE + MIN_SIZE`
+where `MIN_SIZE` is an arbitrary minimum value to determine where the splitting happens. After that we 
+split the block into two blocks and relink the blocks pointers in our  linked list.
+
+**Splitting** means we write to the end of the first block memory region and a new meta block for the next 
+region(second block).
+
+Also we need to consider **padding** or **Address allignment** with this formula `size = (size+(N-1)) & ~(N-1)`
+where `N = 7` because on most systems 8 bytes is enough for most types and universal.
+
+## Merging blocks (free)
+We can apply a sliding window algorithm to merge contiguous free blocks in the linked list.
+
+```
+void merge_free_blocks(struct meta_block* head){
+  struct meta_block* curr = global_base;
+  struct meta_block* prev = NULL;
+
+  if(!curr){
+    return;
+  }
+  
+  while(curr && curr -> next){
+    prev = curr;
+    curr = curr -> next;
+
+    if(curr -> free and prev -> free && ((char*)prev + META_SIZE + prev->size == (char*)curr)){
+      prev -> size += META_SIZE + curr -> size;
+      prev -> next = curr -> next;
+      curr = prev;
+   }
+  }
+}
+```
+
+ or : This is the implemented version to avoid edge cases bugs
+```
+
+void merge_free_blocks(struct block_meta *head) {
+  struct block_meta *current = head;
+
+  while (current && current->next) {
+    struct block_meta *next = current->next;
+
+    // Check if both blocks are free and contiguous in memory
+    if (current->free && next->free &&
+        ((char *)current + META_SIZE + current->size == (char *)next)) {
+
+      // Merge: extend current block to include the next block + its metadata
+      current->size += META_SIZE + next->size;
+      current->next = next->next; // Skip over the merged block
+
+      // Note: we do NOT move 'current' forward here, because the new
+      // merged block might still be adjacent to another free one.
+    } else {
+      // Only move forward if we didn't merge
+      current = current->next;
+    }
+  }
+}
+```
+
+We also did init `last = NULL` to avoid skipping blocks when the first blocks is already free.
+
+**Note About how sbrk works**:
+A memory page = the smallest unit of memory the OS manages, This means when calling `sbkr(SIZE)` if SIZE
+is small enough the OS may not extend the heap repeatedly. Instead it may extend the heap by a whole page
+silently (internally) without modifying the meta blocks so when `sbrk()` is called again we don't need to extend the heap
+to avoid costly system calls.
 
 
 

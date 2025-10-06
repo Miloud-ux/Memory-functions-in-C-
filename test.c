@@ -1,13 +1,15 @@
 #include <assert.h>
-#include <iso646.h>
+#include <iso646.h> // Parses and -> &&
+#include <stdint.h> // To use uintptr_t to hold the memory address of a a pointer regardless of the architecture
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+// of the system
 
 // ===Macros===
 #define META_SIZE sizeof(struct block_meta)
-#define MIN_SIZE 8
+#define MIN_SIZE 8 // For splitting blocks
 
 // === Variables and structs ===
 struct block_meta {
@@ -16,7 +18,6 @@ struct block_meta {
   int free;
   int magic; // for debugging
 };
-
 // Head of the linked list to track all allocated blocks.
 void *global_base = NULL;
 
@@ -35,9 +36,11 @@ void merge_free_blocks(struct block_meta *head);
 // Realloc function
 void *realloc(void *ptr, size_t size);
 void shrink_and_split(struct block_meta *block, size_t size);
+struct block_meta *expand_in_place(void *ptr, size_t size);
 
 // == Debugging ==
 void print_heap(void);
+void debug_heap(void);
 
 int main() {
 
@@ -59,49 +62,74 @@ int main() {
   // printf("block -> free = %d\n", block_addr->free);
   // printf("block -> magic = %x", block_addr->magic);
 
-  printf("=== Test 1: Simple allocation ===\n");
-  int *a = (int *)malloc(10 * sizeof(int));
-  for (int i = 0; i < 10; i++)
+  printf("=== Custom malloc/free/realloc Debugging ===\n");
+
+  // === Test 1: Simple malloc ===
+  printf("\n--- Test 1: Simple malloc ---\n");
+  int *a = (int *)malloc(5 * sizeof(int));
+  for (int i = 0; i < 5; i++)
     a[i] = i;
-  for (int i = 0; i < 10; i++)
-    printf("%d ", a[i]);
-  printf("\n");
+  debug_heap();
 
-  printf("\n=== Test 2: Allocate more blocks ===\n");
-  int *b = (int *)malloc(5 * sizeof(int));
-  int *c = (int *)malloc(8 * sizeof(int));
-  printf("Allocated three blocks: a=%p, b=%p, c=%p\n", (void *)a, (void *)b,
-         (void *)c);
+  // === Test 2: Allocate more blocks ===
+  printf("\n--- Test 2: Allocate additional blocks ---\n");
+  int *b = (int *)malloc(3 * sizeof(int));
+  int *c = (int *)malloc(4 * sizeof(int));
+  debug_heap();
 
-  printf("\n=== Test 3: Free the middle block (b) ===\n");
+  // === Test 3: Free middle block (b) ===
+  printf("\n--- Test 3: Free middle block (b) ---\n");
   free(b);
-  print_heap();
-  printf("Freed block b\n");
+  debug_heap();
 
-  printf(
-      "\n=== Test 4: Allocate a smaller block (should reuse or split b) ===\n");
-  int *d = (int *)malloc(3 * sizeof(int));
-  printf("Allocated d=%p\n", (void *)d);
+  // === Test 4: Allocate smaller block to reuse freed space ===
+  printf("\n--- Test 4: Allocate smaller block (d) ---\n");
+  int *d = (int *)malloc(2 * sizeof(int));
+  debug_heap();
 
-  printf("\n=== Test 5: Free all blocks (a, c, d) ===\n");
+  // === Test 5: Shrink a block with realloc (split leftover) ===
+  printf("\n--- Test 5: Shrink block 'a' ---\n");
+  int *tmp = (int *)realloc(a, 3 * sizeof(int)); // shrink
+  if (tmp)
+    a = tmp;
+  debug_heap();
 
+  // === Test 6: Expand a block with realloc (expand in place if possible) ===
+  printf("\n--- Test 6: Expand block 'a' ---\n");
+  tmp = (int *)realloc(a, 8 * sizeof(int)); // expand
+  if (tmp)
+    a = tmp;
+  debug_heap();
+
+  // === Test 7: realloc NULL pointer (acts like malloc) ===
+  printf("\n--- Test 7: realloc NULL (like malloc) ---\n");
+  int *e = (int *)realloc(NULL, 4 * sizeof(int));
+  if (e) {
+    for (int i = 0; i < 4; i++)
+      e[i] = i * 2;
+  }
+  debug_heap();
+
+  // === Test 8: realloc size 0 (acts like free) ===
+  printf("\n--- Test 8: realloc size 0 (free 'd') ---\n");
+  tmp = (int *)realloc(d, 0); // free
+  if (!tmp)
+    d = NULL;
+  debug_heap();
+
+  // === Test 9: Free all remaining blocks ===
+  printf("\n--- Test 9: Free remaining blocks (a, c, e) ---\n");
   free(a);
-  print_heap();
+  debug_heap();
 
   free(c);
-  print_heap();
+  debug_heap();
 
-  free(d);
-  print_heap();
+  free(e);
+  debug_heap();
 
-  printf("Freed all\n");
+  printf("\n=== Debugging complete ===\n");
 
-  printf("\n=== Test 6: Trigger merge ===\n");
-  // This happens inside free() automatically in your code.
-  // But if you want to check manually:
-  // merge_free_blocks(global_base);
-
-  // Print the linked list of blocks to visualize
   struct block_meta *curr = (struct block_meta *)global_base;
   printf("\n=== Heap State ===\n");
   while (curr) {
@@ -110,8 +138,6 @@ int main() {
            (void *)curr->next);
     curr = curr->next;
   }
-
-  return 0;
 }
 
 struct block_meta *find_free_block(struct block_meta **last, size_t size) {
@@ -267,6 +293,55 @@ void shrink_and_split(struct block_meta *block, size_t size) {
   }
 }
 
+struct block_meta *expand_in_place(void *ptr, size_t size) {
+  struct block_meta *block = get_block_addr(ptr);
+  void *start_address = (char *)block + META_SIZE + block->size;
+  // traverse the linked list and find free adjacent blocks
+
+  struct block_meta *target = global_base;
+  while (target) {
+    if ((void *)target == start_address) {
+      break;
+    }
+    target = target->next;
+  }
+
+  if (!target || target->free == 0) {
+    return NULL;
+  }
+
+  if (block->size + META_SIZE + target->size >= size) {
+
+    // int new_size = size - META_SIZE;
+    // if(new_size >= 0) block -> size = new_size;
+    //  This was an optimization attempt but i guess it's better to
+    //  give a bit more than the user wanted so let's move on
+
+    target->free = 0;
+    target->magic = 0x12345678;
+
+    size_t remaining =
+        (block->size + target->size + META_SIZE) - (size + META_SIZE);
+    block->size = size;
+
+    struct block_meta *next_target = target->next;
+
+    // Check if there's remaining space
+    if (remaining > MIN_SIZE + META_SIZE) {
+      struct block_meta *new_target_block =
+          (struct block_meta *)((char *)block + META_SIZE + block->size);
+      new_target_block->size = remaining;
+      new_target_block->free = 1;
+      new_target_block->next = next_target;
+      new_target_block->magic = 0x5555555;
+      block->next = new_target_block;
+    } else {
+      block->next = target->next;
+    }
+  }
+  return block + 1;
+}
+
 void *realloc(void *ptr, size_t size) {
   if (!ptr) {
     return malloc(size);
@@ -285,21 +360,46 @@ void *realloc(void *ptr, size_t size) {
   }
 
   // if size < block -> size : shrink and split
-  if (myblock->size > size + META_SIZE + MIN_SIZE) {
-    shrink_and_split(myblock, size);
-    return myblock + 1;
-  }
 
   /* if size > block -> size
+   * 1. Check if there's a free adjacent block and expand in place if
+   * possible. Otherwise:
    * 1. free this block
    * 2. allocate new block with the new size
    * 3. copy the content to the new block
    */
 
-  if (size > myblock->size) {
-    void *new_block = malloc(size);
-    memcpy(new_block, ptr, myblock->size);
-    free(ptr);
-    return new_block;
+  if (myblock->size > size + META_SIZE + MIN_SIZE) {
+    shrink_and_split(myblock, size);
+    return myblock + 1;
+  } else if (size > myblock->size) { // equivalent to elif
+    void *new_block = expand_in_place(ptr, size);
+    if (!new_block) {
+      void *new_block = malloc(size);
+      memcpy(new_block, ptr, myblock->size);
+      free(ptr);
+      return new_block;
+    } else {
+      return new_block;
+    }
   }
+  return ptr;
+}
+
+void debug_heap(void) {
+  struct block_meta *curr = (struct block_meta *)global_base;
+  printf("\n[HEAP DEBUG DUMP]\n");
+  printf("%-20s %-8s %-6s %-10s %-20s %-10s\n", "Block Addr", "Size", "Free",
+         "Magic", "Next", "End Addr");
+
+  while (curr) {
+    void *user_start = (void *)(curr + 1);
+    void *user_end = (char *)user_start + curr->size;
+
+    printf("%-20p %-8zu %-6d 0x%-8x %-20p %-10p\n", (void *)curr, curr->size,
+           curr->free, curr->magic, (void *)curr->next, user_end);
+
+    curr = curr->next;
+  }
+  printf("-------------------------------------------------------------\n");
 }
