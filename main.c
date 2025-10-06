@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <iso646.h> // Parses and -> &&
-#include <stdint.h> // To use uintptr_t to hold the memory address of a a pointer regardless of the architecture
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
