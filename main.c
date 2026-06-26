@@ -6,24 +6,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-// ===== CONFIGURATION =====
 #define META_SIZE sizeof(struct block_meta)
-#define MIN_SIZE 8 // Minimum block size for splitting
+#define MIN_SIZE 8
 
-// ===== DATA STRUCTURES =====
 struct block_meta {
   size_t size;
   struct block_meta *next;
   int free;
-  int marked; // For garbage collection
-  int magic;  // For debugging (detects corruption)
+  int marked;
+  int magic;
 };
 
-// Global heap tracking
 void *global_base = NULL;
 uintptr_t stack_bottom = 0;
 
-// ===== ALLOCATOR FUNCTIONS =====
 struct block_meta *find_free_block(struct block_meta **last, size_t size);
 struct block_meta *request_space(struct block_meta *last, size_t size);
 void *malloc(size_t size);
@@ -31,19 +27,16 @@ void free(void *ptr);
 void *realloc(void *ptr, size_t size);
 void merge_free_blocks(struct block_meta *head);
 
-// ===== GARBAGE COLLECTOR FUNCTIONS =====
 void gc_init(void);
 void gc(void);
 static void scan_region(uintptr_t *start, uintptr_t *end);
 static void scan_heap(void);
 
-// ===== UTILITY FUNCTIONS =====
 void debug_heap(void);
 void print_gc_stats(void);
 int count_allocated_blocks(void);
 int count_free_blocks(void);
 
-// ===== MAIN PROGRAM =====
 int main() {
   printf("===============================================\n");
   printf("  GARBAGE COLLECTOR - DEMONSTRATION\n");
@@ -52,7 +45,6 @@ int main() {
   gc_init();
   printf("✓ GC Initialized (Stack bottom: 0x%lx)\n\n", stack_bottom);
 
-  // Test 1: Basic allocation and manual free
   printf("--- Test 1: Basic Allocation ---\n");
   int *a = (int *)malloc(5 * sizeof(int));
   int *b = (int *)malloc(3 * sizeof(int));
@@ -73,7 +65,6 @@ int main() {
   print_gc_stats();
   printf("✓ Test 1 passed\n\n");
 
-  // Test 2: Garbage collection
   printf("--- Test 2: Garbage Collection ---\n");
   int *reachable = (int *)malloc(10 * sizeof(int));
   int *unreachable = (int *)malloc(10 * sizeof(int));
@@ -86,17 +77,16 @@ int main() {
   printf("Before GC:\n");
   print_gc_stats();
 
-  unreachable = NULL; // Make block unreachable
+  unreachable = NULL;
   printf("Made one block unreachable\n");
 
-  gc(); // Run garbage collection
+  gc();
   printf("After GC:\n");
   print_gc_stats();
 
   free(reachable);
   printf("✓ Test 2 passed\n\n");
 
-  // Test 3: Multiple unreachable blocks
   printf("--- Test 3: Multiple Unreachable Blocks ---\n");
   int *p1 = (int *)malloc(20 * sizeof(int));
   int *p2 = (int *)malloc(30 * sizeof(int));
@@ -106,7 +96,7 @@ int main() {
   printf("Allocated 4 blocks\n");
   print_gc_stats();
 
-  p1 = p2 = p3 = NULL; // Make 3 blocks unreachable
+  p1 = p2 = p3 = NULL;
   printf("Made 3 blocks unreachable\n");
 
   gc();
@@ -124,7 +114,6 @@ int main() {
   return 0;
 }
 
-// ========== MEMORY ALLOCATOR IMPLEMENTATION ==========
 
 struct block_meta *find_free_block(struct block_meta **last, size_t size) {
   struct block_meta *current = global_base;
@@ -162,7 +151,6 @@ void *malloc(size_t size) {
     return NULL;
   }
 
-  // Align to 8-byte boundary
   size = (size + 7) & ~7;
 
   struct block_meta *block;
@@ -181,7 +169,6 @@ void *malloc(size_t size) {
       if (!block)
         return NULL;
     } else {
-      // Reuse free block - split if large enough
       if (block->size >= size + META_SIZE + MIN_SIZE) {
         size_t remaining = block->size - size - META_SIZE;
         block->size = size;
@@ -191,7 +178,7 @@ void *malloc(size_t size) {
 
         new_block->size = remaining;
         new_block->free = 1;
-        new_block->marked = 0; // FIX: Initialize marked field
+        new_block->marked = 0;
         new_block->magic = 0x22222222;
         new_block->next = block->next;
 
@@ -213,13 +200,11 @@ void merge_free_blocks(struct block_meta *head) {
   while (current && current->next) {
     struct block_meta *next = current->next;
 
-    // Check if both blocks are free and adjacent
     if (current->free && next->free &&
         ((char *)current + META_SIZE + current->size == (char *)next)) {
 
       current->size += META_SIZE + next->size;
       current->next = next->next;
-      // Don't advance - might merge again
     } else {
       current = current->next;
     }
@@ -255,10 +240,9 @@ void *realloc(void *ptr, size_t size) {
   struct block_meta *block = (struct block_meta *)ptr - 1;
 
   if (size <= block->size) {
-    return ptr; // Current block is big enough
+    return ptr;
   }
 
-  // Need larger block - allocate new and copy
   void *new_ptr = malloc(size);
   if (new_ptr) {
     memcpy(new_ptr, ptr, block->size);
@@ -268,7 +252,6 @@ void *realloc(void *ptr, size_t size) {
   return new_ptr;
 }
 
-// ========== GARBAGE COLLECTOR IMPLEMENTATION ==========
 
 void gc_init(void) {
   static int initialized = 0;
@@ -297,21 +280,18 @@ static void scan_region(uintptr_t *start, uintptr_t *end) {
   uintptr_t heap_start = (uintptr_t)(global_base) + META_SIZE;
   uintptr_t heap_end = (uintptr_t)sbrk(0);
 
-  // Scan each word in the region
   for (uintptr_t *p = start; p < end; p++) {
     uintptr_t value = *p;
 
-    // Check if value looks like a heap pointer
     if (value >= heap_start && value < heap_end) {
 
-      // Find which block it points into
       struct block_meta *block = global_base;
       while (block) {
         uintptr_t block_start = (uintptr_t)(block + 1);
         uintptr_t block_end = block_start + block->size;
 
         if (value >= block_start && value < block_end) {
-          block->marked = 1; // Mark as reachable
+          block->marked = 1;
           break;
         }
 
@@ -327,33 +307,26 @@ static void scan_heap(void) {
 
   int new_marks;
 
-  // Compute transitive closure
   do {
     new_marks = 0;
 
-    // FIX: Reset to beginning each iteration
     struct block_meta *block = global_base;
 
     for (; block != NULL; block = block->next) {
       if (!block->marked)
         continue;
 
-      // Scan this block's data for pointers
       uintptr_t *data = (uintptr_t *)(block + 1);
 
-      // FIX: Divide by sizeof(uintptr_t) to get count
       size_t word_count = block->size / sizeof(uintptr_t);
 
       for (size_t i = 0; i < word_count; i++) {
         uintptr_t value = data[i];
 
-        // Check if it points to another block
-        // FIX: Initialize other_block to global_base
         for (struct block_meta *other = global_base; other != NULL;
              other = other->next) {
           if (!other->marked) {
             uintptr_t other_start = (uintptr_t)(other + 1);
-            // FIX: Cast to char* for byte arithmetic
             uintptr_t other_end =
                 (uintptr_t)((char *)(other + 1) + other->size);
 
@@ -372,16 +345,14 @@ void gc(void) {
   if (!global_base)
     return;
 
-  extern char etext, end; // Linker-provided symbols
+  extern char etext, end;
   struct block_meta *block = global_base;
   for (; block != NULL; block = block->next) {
     block->marked = 0;
   }
 
-  // Mark phase: Scan roots
   scan_region((uintptr_t *)&etext, (uintptr_t *)&end);
 
-  // Scan stack
   uintptr_t stack_top;
 #ifdef __x86_64__
   asm volatile("movq %%rbp, %0" : "=r"(stack_top));
@@ -390,10 +361,8 @@ void gc(void) {
 #endif
   scan_region((uintptr_t *)stack_top, (uintptr_t *)stack_bottom);
 
-  // Scan heap for pointer chains
   scan_heap();
 
-  // Sweep phase: Free unmarked blocks
   block = global_base;
   while (block != NULL) {
     struct block_meta *next = block->next;
@@ -408,7 +377,6 @@ void gc(void) {
   }
 }
 
-// ========== UTILITY FUNCTIONS ==========
 
 int count_allocated_blocks(void) {
   int count = 0;
@@ -449,7 +417,6 @@ void debug_heap(void) {
 
   int count = 0;
   while (curr && count < 20) {
-    // Validate magic before accessing
     if (curr->magic != 0x12345678 && curr->magic != 0x77777777 &&
         curr->magic != 0x22222222 && curr->magic != 0x55555555) {
       printf("%-18p [CORRUPTED - magic: 0x%x]\n", (void *)curr, curr->magic);
